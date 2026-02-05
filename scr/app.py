@@ -37,11 +37,59 @@ if df is not None:
     # Tạo Tab để phân chia công việc
     tab1, tab2, tab3 = st.tabs(["📂 Dữ liệu Gốc", "📈 Trực quan hóa (Chương 2)", "⚙️ Xử lý Dữ liệu (Chương 3 -> 6)"])
 
+    # --- SIDEBAR: BỘ LỌC (FILTERS) ---
+    st.sidebar.header("🔍 Bộ lọc Dữ liệu")
+    
+    # 1. Lọc theo Khoảng thời gian
+    min_date = df['date'].min()
+    max_date = df['date'].max()
+    date_range = st.sidebar.date_input(
+        "Chọn khoảng thời gian:",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+    
+    # 2. Lọc theo Kênh (Channel) - Bao gồm Social & Search
+    all_channels = df['channel'].unique().tolist()
+    selected_channels = st.sidebar.multiselect(
+        "Chọn Kênh Marketing:",
+        options=all_channels,
+        default=all_channels
+    )
+
+    # 3. Lọc theo Chiến dịch (Campaign) - 7 loại chiến dịch
+    all_campaigns = df['campaign'].unique().tolist()
+    selected_campaigns = st.sidebar.multiselect(
+        "Chọn Chiến dịch:",
+        options=all_campaigns,
+        default=all_campaigns
+    )
+
+    # --- ÁP DỤNG BỘ LỌC ---
+    # Lọc theo ngày
+    mask_date = (df['date'] >= pd.to_datetime(date_range[0])) & (df['date'] <= pd.to_datetime(date_range[1]))
+    # Lọc theo kênh & chiến dịch
+    mask_channel = df['channel'].isin(selected_channels)
+    mask_campaign = df['campaign'].isin(selected_campaigns)
+
+    df_filtered = df[mask_date & mask_channel & mask_campaign]
+
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"Số dòng dữ liệu hiển thị: **{len(df_filtered)}**")
+
     # --- TAB 1: XEM DỮ LIỆU GỐC ---
     with tab1:
-        st.header("Xem trước dữ liệu gốc")
-        st.dataframe(df.head(10))
-        st.write(f"Kích thước dữ liệu: {df.shape[0]} dòng, {df.shape[1]} cột")
+        st.header("📂 Dữ liệu Gốc và Dữ liệu đã Lọc")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            st.subheader("Dữ liệu Gốc (Toàn bộ)")
+            st.dataframe(df.head(5))
+        with col_d2:
+            st.subheader("Dữ liệu đang xem (Đã lọc)")
+            st.dataframe(df_filtered.head(5))
+        
+        st.write(f"Kích thước dữ liệu gốc: {df.shape[0]} dòng | Dữ liệu lọc: {df_filtered.shape[0]} dòng")
         
         # Kiểm tra dữ liệu khuyết
         missing = df.isnull().sum().sum()
@@ -50,60 +98,80 @@ if df is not None:
         else:
             st.warning(f"⚠️ Có {missing} giá trị bị thiếu.")
 
-    # --- TAB 2: TRỰC QUAN HÓA (DÀNH CHO CHƯƠNG 2) ---
+    # --- TAB 2: TRỰC QUAN HÓA CHI TIẾT ---
     with tab2:
-        st.header("Trực quan hóa Thống kê Mô tả")
+        st.header("📈 Dashboard Phân tích Hiệu quả Marketing")
         
-        # Layout chia 2 cột
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("1. Cơ cấu Doanh thu theo Kênh")
-            # Tính tổng doanh thu theo kênh
-            revenue_by_channel = df.groupby('channel')['revenue'].sum().reset_index()
-            fig_pie = px.pie(revenue_by_channel, values='revenue', names='channel', title='Tỷ trọng Doanh thu')
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        with col2:
-            st.subheader("2. Tương quan: Chi phí vs Doanh thu")
-            fig_scatter = px.scatter(df, x='cost', y='revenue', color='channel',
-                                     title='Mối quan hệ Cost - Revenue', hover_data=['campaign'])
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-        st.divider()
-
-        st.subheader("3. Xu hướng theo Thời gian")
-        # Gom nhóm theo ngày
-        daily_trend = df.groupby('date')[['cost', 'revenue']].sum().reset_index()
-        fig_line = px.line(daily_trend, x='date', y=['cost', 'revenue'], 
-                           title='Biến động Chi phí và Doanh thu theo ngày',
-                           labels={'value': 'Số tiền', 'variable': 'Chỉ số'})
-        st.plotly_chart(fig_line, use_container_width=True)
-
-        st.divider()
-
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            st.subheader("4. Hiệu quả ROAS trung bình")
-            avg_roas = df.groupby('channel')['roas'].mean().reset_index().sort_values(by='roas', ascending=False)
-            fig_bar = px.bar(avg_roas, x='channel', y='roas', color='channel',
-                             title='So sánh ROAS (Doanh thu / Chi phí)')
-            # Thêm đường tham chiếu
-            fig_bar.add_hline(y=4, line_dash="dot", annotation_text="Mục tiêu = 4.0", line_color="red")
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-        with col4:
-            st.subheader("5. Ma trận Tương quan (Kiểm tra Đa cộng tuyến)")
-            # Chỉ chọn các cột số quan trọng
-            corr_cols = ['cost', 'impressions', 'clicks', 'revenue']
-            corr_matrix = df[corr_cols].corr()
+        if len(df_filtered) == 0:
+            st.warning("⚠️ Không có dữ liệu nào thỏa mãn điều kiện bộ lọc. Vui lòng chọn lại!")
+        else:
+            # --- PHẦN 1: KPI METRICS CARDS ---
+            st.subheader("1. Chỉ số Tổng quan (KPIs)")
             
-            # Vẽ bằng Seaborn và Matplotlib
-            fig_corr, ax = plt.subplots(figsize=(6, 4))
-            sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
-            st.pyplot(fig_corr)
-            st.caption("Lưu ý: Nếu hệ số > 0.9 (màu đỏ đậm) chứng tỏ có đa cộng tuyến mạnh.")
+            total_cost = df_filtered['cost'].sum()
+            total_revenue = df_filtered['revenue'].sum()
+            total_impressions = df_filtered['impressions'].sum()
+            total_conversions = df_filtered['conversions'].sum()
+            avg_roas = total_revenue / total_cost if total_cost > 0 else 0
+            
+            kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+            kpi1.metric("Tổng Chi Phí", f"${total_cost:,.0f}")
+            kpi2.metric("Tổng Doanh Thu", f"${total_revenue:,.0f}")
+            kpi3.metric("Lợi nhuận (Profit)", f"${(total_revenue - total_cost):,.0f}")
+            kpi4.metric("Tổng Chuyển đổi", f"{total_conversions:,.0f}")
+            kpi5.metric("ROAS Trung bình", f"{avg_roas:.2f}x")
+            
+            st.divider()
+
+            # --- PHẦN 2: PHỄU MARKETING (FUNNEL) ---
+            st.subheader("2. Phễu Chuyển đổi (Conversion Funnel)")
+            # Tính các giai đoạn của phễu
+            funnel_data = dict(
+                number=[total_impressions, df_filtered['clicks'].sum(), total_conversions],
+                stage=["Impressions (Hiển thị)", "Clicks (Nhấp chuột)", "Conversions (Chuyển đổi)"]
+            )
+            fig_funnel = px.funnel(funnel_data, x='number', y='stage', title="Hiệu suất Phễu Marketing")
+            st.plotly_chart(fig_funnel, width="stretch")
+            
+            st.divider()
+
+            # --- PHẦN 3: SO SÁNH DOANH THU & CHI PHÍ ---
+            st.subheader("3. Hiệu quả theo Kênh & Chiến dịch")
+            
+            col_chart1, col_chart2 = st.columns(2)
+            
+            with col_chart1:
+                st.markdown("**Doanh thu theo Kênh (Social/Search)**")
+                rev_by_channel = df_filtered.groupby('channel')['revenue'].sum().reset_index()
+                fig_pie = px.pie(rev_by_channel, values='revenue', names='channel', hole=0.4)
+                st.plotly_chart(fig_pie, width="stretch")
+                
+            with col_chart2:
+                st.markdown("**Doanh thu theo Chiến dịch (7 campaigns)**")
+                rev_by_campaign = df_filtered.groupby('campaign')['revenue'].sum().reset_index().sort_values('revenue', ascending=True)
+                fig_bar_camp = px.bar(rev_by_campaign, x='revenue', y='campaign', orientation='h', 
+                                      color='revenue', title="")
+                st.plotly_chart(fig_bar_camp, width="stretch")
+
+            # --- PHẦN 4: BIỂU ĐỒ XU HƯỚNG ---
+            st.subheader("4. Xu hướng theo Thời gian")
+            
+            # Group by theo ngày (hoặc tuần nếu dữ liệu quá dài, ở đây giữ theo ngày)
+            daily_trend = df_filtered.groupby('date')[['cost', 'revenue', 'conversions']].sum().reset_index()
+            
+            # Vẽ biểu đồ 2 trục Y (Dual Axis) nếu cần, hoặc đơn giản là Multi-line
+            fig_trend = px.line(daily_trend, x='date', y=['cost', 'revenue'], 
+                                title='Tương quan Chi tiêu và Doanh thu theo ngày',
+                                markers=True)
+            st.plotly_chart(fig_trend, width="stretch")
+            
+            # --- PHẦN 5: CHI TIẾT HIỆU QUẢ ---
+            st.subheader("5. Tương quan Cost vs Revenue (ROI Analysis)")
+            fig_scatter = px.scatter(df_filtered, x='cost', y='revenue', 
+                                     color='channel', size='conversions', 
+                                     hover_data=['campaign'],
+                                     title='Phân bố hiệu quả đầu tư (Bóng bóng = Số chuyển đổi)')
+            st.plotly_chart(fig_scatter, width="stretch")
 
     # --- TAB 3: XỬ LÝ DỮ LIỆU (CHUẨN BỊ CHO CHƯƠNG 6) ---
     with tab3:
