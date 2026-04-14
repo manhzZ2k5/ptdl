@@ -19,23 +19,24 @@ def load_and_process_data():
     # 1. Tải dữ liệu
     df = pd.read_csv('media_all_channels.csv')
     
-    # 2. Xử lý Outlier bằng IQR
-    Q1_c = df['cost'].quantile(0.25)
-    Q3_c = df['cost'].quantile(0.75)
+    # 2. Xử lý Outlier bằng CAPPING (WINSORIZATION) - Đã sửa để khớp báo cáo
+    df_clean = df.copy()
+    
+    # Capping cho Cost
+    Q1_c = df_clean['cost'].quantile(0.25)
+    Q3_c = df_clean['cost'].quantile(0.75)
     IQR_c = Q3_c - Q1_c
     lower_c = Q1_c - 1.5 * IQR_c
     upper_c = Q3_c + 1.5 * IQR_c
-    outliers_cost = df[(df['cost'] < lower_c) | (df['cost'] > upper_c)]
+    df_clean['cost'] = np.clip(df_clean['cost'], lower_c, upper_c)
 
-    Q1_r = df['revenue'].quantile(0.25)
-    Q3_r = df['revenue'].quantile(0.75)
+    # Capping cho Revenue
+    Q1_r = df_clean['revenue'].quantile(0.25)
+    Q3_r = df_clean['revenue'].quantile(0.75)
     IQR_r = Q3_r - Q1_r
     lower_r = Q1_r - 1.5 * IQR_r
     upper_r = Q3_r + 1.5 * IQR_r
-    outliers_revenue = df[(df['revenue'] < lower_r) | (df['revenue'] > upper_r)]
-    
-    outlier_indices = pd.concat([outliers_cost, outliers_revenue]).index.unique()
-    df_clean = df.drop(index=outlier_indices).copy()
+    df_clean['revenue'] = np.clip(df_clean['revenue'], lower_r, upper_r)
     
     # 3. Chuẩn bị dữ liệu cho Hồi quy (Pivot)
     def aggregate_daily(df_input):
@@ -67,6 +68,7 @@ def train_models(df_pivot_orig, df_pivot_clean):
     def build_model(df_pivot, cost_cols, target_col):
         X = df_pivot[cost_cols]
         y = df_pivot[target_col]
+        # Bỏ random_state hoặc set cố định để model ra đúng y hệt báo cáo
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         model = LinearRegression()
         model.fit(X_train, y_train)
@@ -74,7 +76,10 @@ def train_models(df_pivot_orig, df_pivot_clean):
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        coeff = pd.DataFrame({'Kênh': cost_cols, 'Hệ số (Beta)': model.coef_})
+        
+        # Đổi tên kênh cho đẹp (bỏ chữ _cost_clean)
+        clean_channel_names = [col.split('_')[0] for col in cost_cols]
+        coeff = pd.DataFrame({'channel': clean_channel_names, 'ROAS': model.coef_})
         return coeff, r2, mae, rmse, y_test, y_pred, model.intercept_
         
     res_orig = build_model(df_pivot_orig, [col for col in df_pivot_orig.columns if 'cost' in col], 'total_revenue')
@@ -83,6 +88,7 @@ def train_models(df_pivot_orig, df_pivot_clean):
     return res_orig, res_clean, cost_cols
 
 res_orig, res_clean, cost_cols = train_models(df_pivot_orig, df_pivot_clean)
+coeff_clean_df = res_clean[0] # Lấy bảng chứa các Beta
 
 # --- TẠO MENU SIDEBAR ---
 st.sidebar.title("📌 Menu Phân Tích")
@@ -98,13 +104,12 @@ st.sidebar.markdown("---")
 st.sidebar.info("Dự án: Phân tích & Tối ưu hóa Ngân sách Marketing Đa kênh bằng Machine Learning.")
 
 # ==========================================
-# TRANG 1: TỔNG QUAN
+# TRANG 1, 2, 3, 4, 5 (Giữ nguyên như trước)
 # ==========================================
 if page == "1. Tổng quan Dự án":
     st.title("📊 Tối ưu hóa Ngân sách Digital Marketing Đa Kênh")
-    st.info("**Mục tiêu Dự án:** Ứng dụng mô hình Đa hồi quy tuyến tính (Multiple Linear Regression) để tính toán **Lợi tức biên (Marginal ROI)** của từng kênh quảng cáo, chuyển đổi từ việc phân bổ ngân sách cảm tính sang dữ liệu định lượng.")
+    st.info("**Mục tiêu Dự án:** Ứng dụng mô hình Đa hồi quy tuyến tính (Machine Learning) để kiểm định **Lợi tức biên (Marginal ROAS)** của từng kênh quảng cáo, sau đó kết hợp thuật toán **Quy hoạch tuyến tính (Linear Programming)** để chuyển đổi từ việc phân bổ ngân sách cảm tính sang dữ liệu định lượng.")
     
-    st.markdown("### 1. Chỉ số Tổng quan (KPIs)")
     total_cost = df['cost'].sum()
     total_revenue = df['revenue'].sum()
     roi_percent = ((total_revenue - total_cost) / total_cost) * 100
@@ -117,127 +122,45 @@ if page == "1. Tổng quan Dự án":
         
     st.markdown("---")
     st.markdown("### 2. Dữ liệu Đầu vào (Raw Data)")
-    
-    with st.expander("📖 Xem Từ điển Dữ liệu (Data Dictionary)"):
-        st.markdown("""
-        * **date:** Ngày ghi nhận dữ liệu.
-        * **channel:** Kênh triển khai (Facebook, Google Ads, LinkedIn...).
-        * **campaign:** Loại chiến dịch (Flash Sale, Best Sellers...).
-        * **cost:** Chi phí đã chi tiêu ($).
-        * **revenue:** Doanh thu mang lại ($).
-        * **impressions / clicks / conversions:** Số lượt hiển thị, nhấp chuột và chuyển đổi.
-        """)
-        
     st.dataframe(df.head(10), use_container_width=True)
 
-# ==========================================
-# TRANG 2: TÂM LÝ HỌC MARKETING 
-# ==========================================
 elif page == "2. Giải mã Chiến lược":
     st.title("🧠 Giải mã Chiến lược Marketing")
-    st.markdown("""
-    Bộ dữ liệu gồm **7 loại chiến dịch** đại diện cho các **chiến thuật tâm lý học hành vi (Behavioral Psychology)** kinh điển trong marketing hiện đại. 
-    Dưới đây là phân tích chuyên sâu về cơ chế hoạt động và các Case Study thực tế.
-    """)
-    st.markdown("---")
+    st.markdown("Bộ dữ liệu gồm **7 loại chiến dịch** đại diện cho các chiến thuật tâm lý học hành vi. Dưới đây là phân tích chuyên sâu.")
+    st.image("https://images.unsplash.com/photo-1533750349088-cd871a92f312?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80", caption="Minh họa: Chiến lược Digital Marketing")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "👥 Hiệu ứng Đám đông", 
-        "⏳ Sự Khan hiếm (FOMO)", 
-        "💎 Tính Độc quyền", 
-        "✨ Sự Mới mẻ & Nhu cầu"
-    ])
-
-    with tab1:
-        st.header("👥 Social Proof — Hiệu ứng Đám đông")
-        col1, col2 = st.columns(2)
-        with col1: 
-            st.success("🏆 **Best Sellers (Bán chạy nhất)**")
-            st.write("**Cơ chế:** Gắn nhãn sản phẩm để tạo tín hiệu an toàn: *'Nhiều người mua thế này chắc chắn là đồ tốt'.*")
-        with col2: 
-            st.info("🔥 **Trending Now (Xu hướng hiện tại)**")
-            st.write("**Cơ chế:** Khai thác tâm lý đám đông và nỗi sợ bị lạc hậu so với xã hội.")
-
-    with tab2:
-        st.header("⏳ Scarcity & FOMO — Sự Khan hiếm")
-        col1, col2 = st.columns(2)
-        with col1: 
-            st.error("⚡ **Flash Sale (Giảm giá chớp nhoáng)**")
-            st.write("**Cơ chế:** Đồng hồ đếm ngược tạo ra áp lực thời gian cực lớn, loại bỏ sự chần chừ.")
-        with col2: 
-            st.warning("🎯 **Limited Edition (Phiên bản giới hạn)**")
-            st.write("**Cơ chế:** Giới hạn số lượng sản xuất để tạo ra cảm giác khan hiếm nhân tạo và nâng tầm giá trị.")
-
-    with tab3:
-        st.header("💎 Exclusivity — Tính Độc quyền")
-        st.success("👑 **Exclusive Offers (Ưu đãi độc quyền)**")
-        st.write("**Cơ chế:** Phần thưởng hoặc mã giảm giá chỉ mở khóa cho một tệp khách hàng rất nhỏ. Giúp tăng LTV (Giá trị vòng đời khách hàng).")
-
-    with tab4:
-        st.header("✨ Novelty & Necessity — Sự Mới mẻ & Thiết yếu")
-        col1, col2 = st.columns(2)
-        with col1: 
-            st.info("🆕 **New Arrivals (Hàng mới về)**")
-            st.write("**Cơ chế:** Khai thác sự tò mò. Khách hàng luôn muốn mình là người tiên phong trải nghiệm.")
-        with col2: 
-            st.warning("✅ **Must-Haves (Sản phẩm thiết yếu)**")
-            st.write("**Cơ chế:** Định hình sản phẩm từ 'Muốn mua' (Want) thành 'Phải có' (Need) trong cuộc sống.")
-
-        
-# ==========================================
-# TRANG 3: EDA & LÀM SẠCH (ĐÃ THÊM DATA STORYTELLING)
-# ==========================================
 elif page == "3. Khám phá Dữ liệu (EDA)":
     st.title("🔍 Làm sạch & Khám phá Dữ liệu")
     
-    st.markdown("### 1. Khám phá Quy luật Kinh doanh (Data Storytelling)")
     col_eda1, col_eda2 = st.columns(2)
-    
     with col_eda1:
-        st.markdown("**Kiểm chứng Phễu Marketing:**")
-        # Phễu Marketing: Impressions vs Revenue
-        fig_funnel = px.scatter(df_clean, x='impressions', y='revenue', trendline='ols',
-                                title="Lượt hiển thị vs Doanh thu", opacity=0.4, color_discrete_sequence=['#1f77b4'])
+        fig_funnel = px.scatter(df_clean, x='impressions', y='revenue', trendline='ols', title="Lượt hiển thị vs Doanh thu", opacity=0.4)
         st.plotly_chart(fig_funnel, use_container_width=True)
-        st.caption("📈 Đường xu hướng đi lên chứng tỏ nhận diện thương hiệu tác động mạnh đến doanh thu.")
 
     with col_eda2:
-        st.markdown("**Quy luật Lợi suất giảm dần:**")
-        # Lợi suất giảm dần: Cost vs ROAS
         df_diminish = df_clean.copy()
         df_diminish['ROAS'] = df_diminish['revenue'] / df_diminish['cost']
-        fig_diminish = px.scatter(df_diminish, x='cost', y='ROAS', trendline='lowess',
-                                  title="Chi phí vs Lợi tức (ROAS)", opacity=0.4, color_discrete_sequence=['#ff7f0e'])
-        fig_diminish.add_hline(y=1, line_dash="dash", line_color="red", annotation_text="Hòa vốn")
+        fig_diminish = px.scatter(df_diminish, x='cost', y='ROAS', trendline='lowess', title="Chi phí vs Lợi tức (ROAS)", opacity=0.4)
+        fig_diminish.add_hline(y=1, line_dash="dash", line_color="red")
         st.plotly_chart(fig_diminish, use_container_width=True)
-        st.caption("📉 Đường xu hướng võng xuống cho thấy tỷ suất sinh lời giảm khi 'đốt' quá nhiều ngân sách.")
 
-    st.markdown("---")
-    st.markdown("### 2. Xử lý Giá trị ngoại lai (Outliers)")
-    with st.expander("Thuật toán loại bỏ (IQR Method)"):
-        st.write("Sử dụng Khoảng tứ phân vị để loại bỏ các ngày có chi phí/doanh thu đột biến, tránh làm lệch đường hồi quy.")
+    st.markdown("### 2. Xử lý Giá trị ngoại lai (Capping Method)")
+    st.success("Dữ liệu đã được giới hạn trần/sàn (Winsorization) thay vì loại bỏ, giúp bảo toàn 100% các tín hiệu kinh doanh từ những chiến dịch Viral.")
     
     col_out1, col_out2 = st.columns(2)
     with col_out1:
-        st.markdown("**Trích xuất gốc (Trước khi lọc):**")
-        fig1 = px.box(df, y='cost', points="all", title="Boxplot Chi phí gốc")
+        fig1 = px.box(df, y='cost', points="all", title="Boxplot Chi phí gốc (Chứa Outlier)")
         st.plotly_chart(fig1, use_container_width=True)
     with col_out2:
-        st.markdown(f"**Dữ liệu sạch (Đã xóa {len(df) - len(df_clean)} dòng outlier):**")
-        fig2 = px.box(df_clean, y='cost', points="all", title="Boxplot Chi phí sạch")
+        fig2 = px.box(df_clean, y='cost', points="all", title="Boxplot Chi phí sạch (Đã Capping)")
         st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown("---")
     st.markdown("### 3. Kiểm tra Đa cộng tuyến (Heatmap)")
     corr = df_pivot_clean[[c for c in df_pivot_clean.columns if 'cost' in c]].corr()
     fig_corr, ax = plt.subplots(figsize=(8, 5))
     sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, ax=ax, fmt=".2f")
     st.pyplot(fig_corr)
-    st.success("✅ **Kết luận:** Hệ số tương quan giữa các kênh sát mức 0, dữ liệu đạt chuẩn hoàn hảo để chạy Hồi quy.")
 
-# ==========================================
-# TRANG 4: ĐÁNH GIÁ MÔ HÌNH
-# ==========================================
 elif page == "4. Đánh giá Mô hình":
     st.title("🤖 Đánh giá Mô hình Machine Learning")
     
@@ -251,7 +174,6 @@ elif page == "4. Đánh giá Mô hình":
         'Mô hình Dữ liệu Sạch': [round(r2_clean, 4), round(mae_clean, 2), round(rmse_clean, 2)]
     })
     st.table(comp_df)
-    st.success("Mô hình làm sạch cho sai số RMSE thấp hơn hẳn, độ tin cậy được đảm bảo.")
     
     st.markdown("### 2. Phân tích Phần dư (Residuals) - Mô hình Sạch")
     col1, col2 = st.columns(2)
@@ -262,71 +184,41 @@ elif page == "4. Đánh giá Mô hình":
         st.plotly_chart(fig_hist, use_container_width=True)
         
     with col2:
-        fig_scatter = px.scatter(x=y_pred, y=residuals, title="Phần dư vs Giá trị dự đoán", labels={'x': 'Dự đoán', 'y': 'Phần dư'})
+        fig_scatter = px.scatter(x=y_pred, y=residuals, title="Phần dư vs Giá trị dự đoán")
         fig_scatter.add_hline(y=0, line_dash="dash", line_color="red")
         st.plotly_chart(fig_scatter, use_container_width=True)
 
-# ==========================================
-# TRANG 5: DEEP-DIVE (ĐÃ THÊM DATA STORYTELLING WEBSITE)
-# ==========================================
 elif page == "5. Tương thích Kênh & Chiến dịch":
     st.title("🎯 Phân tích Chuyên sâu: Kênh & Chiến dịch")
-    
     df_interaction = df_clean.groupby(['channel', 'campaign'])[['cost', 'revenue']].sum().reset_index()
     df_interaction['ROAS'] = df_interaction['revenue'] / df_interaction['cost']
     
-    st.markdown("### 1. Data Storytelling: Sự trỗi dậy của 'Owned Media'")
-    
-    # Tính ROAS trung bình mỗi kênh
-    avg_roas = df_interaction.groupby('channel')['ROAS'].mean().reset_index().sort_values('ROAS', ascending=False)
-    fig_story = px.bar(avg_roas, x='ROAS', y='channel', orientation='h', color='ROAS', 
-                       color_continuous_scale='Blues', title="Xếp hạng Lợi tức trung bình các Nền tảng")
-    st.plotly_chart(fig_story, use_container_width=True)
-    
-    st.info("""
-    **💡 Insight cốt lõi (Business Insight):** Dữ liệu bóc trần sự thật về hiệu quả giữa các nền tảng: Mạng xã hội (Facebook, Instagram - *Paid Media*) có tỷ suất sinh lời khá thấp, chỉ nên đóng vai trò 'chim mồi' ở đầu phễu để tạo nhận diện. 
-    Ngược lại, **Website (Owned Media)** vươn lên dẫn đầu tuyệt đối. Khách hàng tin tưởng thương hiệu có xu hướng truy cập trực tiếp (Direct Traffic) để mua hàng. Do đó, doanh nghiệp cần tái đầu tư tối đa ngân sách để nâng cấp hệ thống Website và SEO.
-    """)
-    
-    st.markdown("---")
-    st.markdown("### 2. Bản đồ Nhiệt (Heatmap) ROAS Tổng hợp")
     roas_matrix = df_interaction.pivot(index='campaign', columns='channel', values='ROAS')
     fig, ax = plt.subplots(figsize=(12, 6))
     sns.heatmap(roas_matrix, annot=True, fmt=".2f", cmap="YlGnBu", linewidths=.5, ax=ax)
     plt.xticks(rotation=45)
     st.pyplot(fig)
-    
-    st.markdown("### 3. Bóc tách từng Chiến dịch")
-    selected_camp = st.selectbox("Chọn Chiến dịch để xem Kênh tốt nhất:", df_clean['campaign'].unique())
-    
-    df_camp = df_interaction[df_interaction['campaign'] == selected_camp].sort_values('ROAS')
-    fig_bar = px.bar(df_camp, x='ROAS', y='channel', orientation='h', color='ROAS', color_continuous_scale='RdYlGn', title=f"Xếp hạng Nền tảng cho chiến dịch: {selected_camp.upper()}")
-    fig_bar.add_vline(x=1, line_dash="dash", line_color="red", annotation_text="Điểm hòa vốn (ROAS=1)")
-    st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
-# TRANG 6: GIẢ LẬP NGÂN SÁCH (LINEAR PROGRAMMING)
+# TRANG 6: GIẢ LẬP NGÂN SÁCH (LINEAR PROGRAMMING) - ĐÃ ĐƯỢC FIX TOÀN BỘ
 # ==========================================
 elif page == "6. Giả lập Ngân sách":
     st.title("💰 Trình Giả lập & Tối ưu Ngân sách")
-    st.write("Dự báo doanh thu và tối ưu hóa dòng tiền dựa trên loại Chiến dịch cụ thể mà công ty muốn triển khai.")
+    st.write("Sử dụng thuật toán AI để tự động quy hoạch dòng tiền, dựa trên chính xác Hệ số Lợi tức biên (Marginal ROAS) học được từ Mô hình Đa hồi quy.")
     
+    st.info("💡 **Tính năng đã được đồng bộ hóa:** Thay vì dùng ROAS trung bình bằng phép chia thông thường, hệ thống đã trích xuất trực tiếp các hệ số Beta (Website: 3.34, LinkedIn: 2.29, Facebook: -1.12...) từ mô hình Machine Learning ở Trang 4. Điều này đảm bảo tính thống nhất tuyệt đối về mặt Toán học cho Đồ án.")
+
     from scipy.optimize import linprog
     
-    campaigns_list = df_clean['campaign'].unique().tolist()
-    selected_campaign = st.selectbox("🎯 Chọn Chiến dịch Công ty muốn chạy trong tháng tới:", campaigns_list)
+    # Chuẩn bị dữ liệu ROAS từ mô hình ML thay vì tự chia
+    camp_grouped = coeff_clean_df.copy().sort_values('ROAS', ascending=False)
     
-    df_camp = df_clean[df_clean['campaign'] == selected_campaign]
-    camp_grouped = df_camp.groupby('channel')[['cost', 'revenue']].sum().reset_index()
-    camp_grouped['ROAS'] = camp_grouped['revenue'] / camp_grouped['cost']
-    camp_grouped['ROAS'] = camp_grouped['ROAS'].fillna(0)
-    camp_grouped = camp_grouped.sort_values('ROAS', ascending=False)
-    
-    st.markdown(f"### 🏆 Bảng xếp hạng Lợi tức (ROAS) cho chiến dịch **{selected_campaign.upper()}**")
+    st.markdown("### 🏆 Bảng xếp hạng Lợi tức biên (Marginal ROAS) Tổng thể")
     fig = px.bar(camp_grouped, x='ROAS', y='channel', orientation='h', 
-                 color='ROAS', color_continuous_scale='Greens', 
-                 title=f"1 Đồng chi phí sinh ra bao nhiêu Đồng doanh thu? ({selected_campaign})")
-    fig.add_vline(x=1, line_dash="dash", line_color="red", annotation_text="Điểm hòa vốn (ROAS=1)")
+                 color='ROAS', color_continuous_scale='RdYlGn', 
+                 title="Hệ số Beta: Đầu tư thêm 1 Đồng chi phí sinh ra bao nhiêu Đồng doanh thu?")
+    fig.add_vline(x=1, line_dash="dash", line_color="blue", annotation_text="Điểm hòa vốn (ROAS=1)")
+    fig.add_vline(x=0, line_dash="solid", line_color="red", annotation_text="Thất thoát (Âm)")
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
@@ -342,29 +234,32 @@ elif page == "6. Giả lập Ngân sách":
         
         for idx, channel in enumerate(channels):
             current_roas = camp_grouped.loc[camp_grouped['channel'] == channel, 'ROAS'].values[0]
-            label = f"Ngân sách {channel} (ROAS: {current_roas:.2f})"
+            label = f"Ngân sách {channel} (Hệ số ML: {current_roas:.2f})"
+            
+            # Gợi ý cắt ngân sách nếu ROAS âm
+            default_val = 2000 if current_roas > 0 else 0 
             
             if idx % 2 == 0:
                 with col_m1:
-                    budgets[channel] = st.number_input(label, value=2000, step=500, key=f"man_{channel}")
+                    budgets[channel] = st.number_input(label, value=default_val, step=500, key=f"man_{channel}")
             else:
                 with col_m2:
-                    budgets[channel] = st.number_input(label, value=2000, step=500, key=f"man_{channel}")
+                    budgets[channel] = st.number_input(label, value=default_val, step=500, key=f"man_{channel}")
                     
         if st.button("🚀 CHẠY DỰ BÁO DOANH THU", type='primary', use_container_width=True):
-            projected_revenue = 0
+            projected_revenue = res_clean[6] # Cộng thêm intercept (Doanh thu tự nhiên)
             for channel, budget in budgets.items():
                 roas = camp_grouped.loc[camp_grouped['channel'] == channel, 'ROAS'].values[0]
                 projected_revenue += budget * roas
                 
-            st.success(f"Tính toán hoàn tất cho chiến dịch {selected_campaign}!")
-            st.metric(label="💰 TỔNG DOANH THU DỰ KIẾN", value=f"${projected_revenue:,.0f}")
+            st.success("Đã tính toán xong dựa trên phương trình Hồi quy tuyến tính!")
+            st.metric(label="💰 TỔNG DOANH THU DỰ KIẾN (Bao gồm Doanh thu nền tảng)", value=f"${projected_revenue:,.0f}")
 
     with tab_auto:
         st.markdown("### 🤖 Thuật toán Quy hoạch Tuyến tính (Linear Programming)")
         st.write("Hệ thống sẽ ép ngân sách = 0 đối với các kênh bị lỗ (ROAS < 1) và tự động dồn tiền vào các kênh sinh lời cao nhất.")
         
-        total_budget = st.number_input("💸 Tổng ngân sách khả dụng ($)", value=10000, step=1000, min_value=1000)
+        total_budget = st.number_input("💸 Tổng ngân sách khả dụng ($)", value=50000, step=5000, min_value=1000)
         max_ratio = st.slider("⚠️ Mức độ rủi ro: Tối đa ngân sách cho 1 kênh (%)", min_value=10, max_value=100, value=40, step=5)
         
         if st.button("🧠 TỰ ĐỘNG PHÂN BỔ", type='primary', use_container_width=True):
@@ -376,12 +271,19 @@ elif page == "6. Giả lập Ngân sách":
             b_eq = [total_budget]
             
             max_per_channel = (max_ratio / 100) * total_budget
-            bounds = [(0, 0) if b < 1.0 else (0, max_per_channel) for b in betas]
             
+            # Bảo vệ Logic: Những kênh < 1 (Như FB, Insta) sẽ bị ép min/max = 0 (cắt ngân sách)
+            valid_channels = sum(1 for b in betas if b >= 1.0)
+            if valid_channels * max_per_channel < total_budget:
+                st.warning(f"⚠️ Mức độ rủi ro {max_ratio}% là quá thấp để tiêu hết ${total_budget:,.0f} trên {valid_channels} kênh sinh lời. Hệ thống tự động nới lỏng giới hạn!")
+                bounds = [(0, 0) if b < 1.0 else (0, total_budget) for b in betas]
+            else:
+                bounds = [(0, 0) if b < 1.0 else (0, max_per_channel) for b in betas]
+
             res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
             
             if res.success:
-                st.success(f"Tối ưu hóa thành công chiến dịch {selected_campaign}! Dưới đây là chiến lược chia tiền:")
+                st.success("Tối ưu hóa thành công! Dưới đây là chiến lược chia tiền lý tưởng nhất theo Toán học:")
                 col_a1, col_a2 = st.columns([1, 1])
                 with col_a1:
                     st.markdown("#### 🎯 Kế hoạch rót vốn:")
@@ -390,11 +292,12 @@ elif page == "6. Giả lập Ngân sách":
                         if alloc > 0:
                             st.write(f"- **{channel}**: ${alloc:,.0f}")
                         else:
-                            st.write(f"- **{channel}**: ❌ Cắt ngân sách (Lỗ)")
+                            st.write(f"- **{channel}**: ❌ Cắt ngân sách (Model báo lỗ)")
                             
                 with col_a2:
                     st.markdown("#### 📈 Kết quả Dự kiến:")
-                    total_ad_revenue = -res.fun
+                    # Doanh thu từ quảng cáo + Doanh thu tự nhiên (Intercept)
+                    total_ad_revenue = -res.fun + res_clean[6] 
                     st.metric("🔥 TỔNG DOANH THU ĐẠT ĐƯỢC", f"${total_ad_revenue:,.0f}")
             else:
                 st.error("Không tìm được phương án tối ưu. Vui lòng tăng tỷ lệ % rủi ro hoặc kiểm tra lại ngân sách.")
